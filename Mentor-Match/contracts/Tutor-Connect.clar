@@ -19,6 +19,7 @@
 (define-constant ERR-INVALID-TIME-SLOT (err u113))
 (define-constant ERR-TUTOR-NOT-AVAILABLE (err u114))
 (define-constant ERR-ALREADY-REGISTERED (err u115))
+(define-constant ERR-INVALID-INPUT (err u116))
 
 ;; Contract owner for administrative functions
 (define-constant CONTRACT-OWNER tx-sender)
@@ -38,6 +39,16 @@
 ;; Rating validation constants
 (define-constant MIN-RATING u1)
 (define-constant MAX-RATING u5)
+
+;; Input validation constants
+(define-constant MIN-NAME-LENGTH u1)
+(define-constant MAX-NAME-LENGTH u50)
+(define-constant MIN-SUBJECT-LENGTH u1)
+(define-constant MAX-SUBJECT-LENGTH u30)
+(define-constant MIN-REASON-LENGTH u10)
+(define-constant MAX-REASON-LENGTH u200)
+(define-constant MIN-RESOLUTION-LENGTH u10)
+(define-constant MAX-RESOLUTION-LENGTH u200)
 
 ;; Data structure for tutor profiles
 (define-map tutors
@@ -126,12 +137,56 @@
 ;; Platform earnings accumulator
 (define-data-var platform-earnings uint u0)
 
+;; Helper function to validate string input
+(define-private (is-valid-string (input (string-ascii 200)) (min-len uint) (max-len uint))
+    (let ((input-len (len input)))
+        (and (>= input-len min-len) (<= input-len max-len))
+    )
+)
+
+;; Helper function to validate name
+(define-private (is-valid-name (name (string-ascii 50)))
+    (is-valid-string name MIN-NAME-LENGTH MAX-NAME-LENGTH)
+)
+
+;; Helper function to validate subject
+(define-private (is-valid-subject (subject (string-ascii 30)))
+    (is-valid-string subject MIN-SUBJECT-LENGTH MAX-SUBJECT-LENGTH)
+)
+
+;; Helper function to validate subjects list
+(define-private (validate-subjects (subjects (list 10 (string-ascii 30))))
+    (let ((subjects-len (len subjects)))
+        (and 
+            (> subjects-len u0)
+            (<= subjects-len u10)
+            (fold check-subject-validity subjects true)
+        )
+    )
+)
+
+;; Helper function for fold to check each subject
+(define-private (check-subject-validity (subject (string-ascii 30)) (prev-valid bool))
+    (and prev-valid (is-valid-subject subject))
+)
+
+;; Helper function to validate reason/resolution strings
+(define-private (is-valid-reason (reason (string-ascii 200)))
+    (is-valid-string reason MIN-REASON-LENGTH MAX-REASON-LENGTH)
+)
+
+;; Helper function to validate resolution strings
+(define-private (is-valid-resolution (resolution (string-ascii 200)))
+    (is-valid-string resolution MIN-RESOLUTION-LENGTH MAX-RESOLUTION-LENGTH)
+)
+
 ;; Function to register as a tutor
 (define-public (register-tutor (name (string-ascii 50)) (subjects (list 10 (string-ascii 30))) (hourly-rate uint))
     (begin
         ;; Validate inputs
+        (asserts! (is-valid-name name) ERR-INVALID-INPUT)
+        (asserts! (validate-subjects subjects) ERR-INVALID-INPUT)
         (asserts! (> hourly-rate u0) ERR-INVALID-AMOUNT)
-        (asserts! (> (len subjects) u0) ERR-INVALID-AMOUNT)
         
         ;; Check if already registered
         (asserts! (is-none (map-get? tutors tx-sender)) ERR-ALREADY-REGISTERED)
@@ -155,6 +210,9 @@
 ;; Function to register as a student
 (define-public (register-student (name (string-ascii 50)))
     (begin
+        ;; Validate input
+        (asserts! (is-valid-name name) ERR-INVALID-INPUT)
+        
         ;; Check if already registered
         (asserts! (is-none (map-get? students tx-sender)) ERR-ALREADY-REGISTERED)
         
@@ -181,6 +239,7 @@
         (total-with-fee (+ total-amount platform-fee))
     )
         ;; Validate inputs
+        (asserts! (is-valid-subject subject) ERR-INVALID-INPUT)
         (asserts! (> duration-hours u0) ERR-INVALID-AMOUNT)
         (asserts! (> start-time block-height) ERR-INVALID-TIME-SLOT)
         (asserts! (get is-active tutor-data) ERR-TUTOR-NOT-AVAILABLE)
@@ -337,6 +396,9 @@
         ;; Validate rating range
         (asserts! (and (>= rating MIN-RATING) (<= rating MAX-RATING)) ERR-RATING-OUT-OF-RANGE)
         
+        ;; Validate comment (allow empty comments)
+        (asserts! (<= (len comment) u200) ERR-INVALID-INPUT)
+        
         ;; Validate user is part of the session
         (asserts! (or is-tutor is-student) ERR-UNAUTHORIZED-ACCESS)
         
@@ -391,6 +453,9 @@
             (is-eq tx-sender (get student session-data))
         ))
     )
+        ;; Validate input
+        (asserts! (is-valid-reason reason) ERR-INVALID-INPUT)
+        
         ;; Validate user is part of the session
         (asserts! is-participant ERR-UNAUTHORIZED-ACCESS)
         
@@ -488,6 +553,15 @@
     )
         ;; Only contract owner can resolve disputes
         (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED-ACCESS)
+        
+        ;; Validate dispute ID is within valid range
+        (asserts! (and (> dispute-id u0) (<= dispute-id (var-get dispute-counter))) ERR-SESSION-NOT-FOUND)
+        
+        ;; Validate resolution input
+        (asserts! (is-valid-resolution resolution) ERR-INVALID-INPUT)
+        
+        ;; Validate dispute is still pending
+        (asserts! (is-eq (get status dispute-data) STATUS-PENDING) ERR-INVALID-STATUS)
         
         ;; Update dispute
         (map-set disputes dispute-id
